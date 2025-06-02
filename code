@@ -1,0 +1,60 @@
+import os
+import cv2
+from ultralytics import YOLO
+import matplotlib.pyplot as plt
+
+# === Paths ===
+source_root = r"C:\path\to\your\folders"         # e.g., faces_dataset
+output_root = r"C:\path\to\cropped_faces"        # where to save cropped faces
+
+# === Load YOLOv8 face model ===
+model = YOLO("yolov8n-face.pt")  # Replace with your model if needed
+
+# === Create output root directory if not exists ===
+os.makedirs(output_root, exist_ok=True)
+
+# === Walk through source folders ===
+for folder_name in os.listdir(source_root):
+    folder_path = os.path.join(source_root, folder_name)
+    if not os.path.isdir(folder_path):
+        continue
+
+    # Create matching output subfolder
+    output_subdir = os.path.join(output_root, folder_name)
+    os.makedirs(output_subdir, exist_ok=True)
+
+    for file_name in os.listdir(folder_path):
+        if not file_name.lower().endswith(('.jpg', '.jpeg', '.png')):
+            continue
+
+        image_path = os.path.join(folder_path, file_name)
+        image = cv2.imread(image_path)
+        if image is None:
+            print(f"[!] Failed to read: {image_path}")
+            continue
+
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        results = model(image_rgb)[0]
+
+        # Detect and save all face crops
+        face_count = 0
+        for box in results.boxes:
+            conf = float(box.conf[0])
+            if conf > 0.5:
+                x1, y1, x2, y2 = map(int, box.xyxy[0])
+                x1, y1 = max(x1, 0), max(y1, 0)
+                x2, y2 = min(x2, image.shape[1]), min(y2, image.shape[0])
+
+                face_crop = image[y1:y2, x1:x2]
+                if face_crop.size == 0:
+                    continue
+
+                face_count += 1
+                name, ext = os.path.splitext(file_name)
+                face_filename = f"{name}_{face_count}{ext}"
+                face_save_path = os.path.join(output_subdir, face_filename)
+
+                cv2.imwrite(face_save_path, face_crop)
+                print(f"[✓] Saved: {face_save_path}")
+
+print("\n✅ All face crops saved to:", output_root)
