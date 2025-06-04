@@ -1,0 +1,302 @@
+import json
+import psycopg2
+from psycopg2.extras import RealDictCursor
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class WikiDataDatabase:
+    def __init__(self, host="localhost", database="actors_db", user="your_username", password="your_password"):
+        """Initialize database connection parameters"""
+        self.connection_params = {
+            'host': host,
+            'database': database,
+            'user': user,
+            'password': password
+        }
+        self.conn = None
+        self.cursor = None
+    
+    def connect(self):
+        """Establish database connection"""
+        try:
+            self.conn = psycopg2.connect(**self.connection_params)
+            self.cursor = self.conn.cursor(cursor_factory=RealDictCursor)
+            logger.info("Database connection established")
+        except Exception as e:
+            logger.error(f"Error connecting to database: {e}")
+            raise
+    
+    def create_wiki_table(self):
+        """Create the wiki_data table with proper schema"""
+        create_table_query = """
+        CREATE TABLE IF NOT EXISTS wiki_data (
+            id SERIAL PRIMARY KEY,
+            imdb_id VARCHAR(50) UNIQUE NOT NULL,
+            wikidata_id VARCHAR(50),
+            wikipedia_url TEXT,
+            wikipedia_title VARCHAR(500),
+            status VARCHAR(20),
+            title VARCHAR(500),
+            description TEXT,
+            extract TEXT,
+            full_extract TEXT,
+            page_id INTEGER,
+            page_url TEXT,
+            lang VARCHAR(10),
+            birth_date DATE,
+            birth_place TEXT,
+            occupation TEXT,
+            thumbnail_url TEXT,
+            thumbnail_width INTEGER,
+            thumbnail_height INTEGER,
+            original_image_url TEXT,
+            original_image_width INTEGER,
+            original_image_height INTEGER,
+            categories TEXT[],
+            wikidata_info JSONB,
+            raw_data JSONB,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        
+        -- Create indexes for better performance
+        CREATE INDEX IF NOT EXISTS idx_wiki_imdb_id ON wiki_data(imdb_id);
+        CREATE INDEX IF NOT EXISTS idx_wiki_wikidata_id ON wiki_data(wikidata_id);
+        CREATE INDEX IF NOT EXISTS idx_wiki_title ON wiki_data(wikipedia_title);
+        CREATE INDEX IF NOT EXISTS idx_wiki_status ON wiki_data(status);
+        """
+        
+        try:
+            self.cursor.execute(create_table_query)
+            self.conn.commit()
+            logger.info("Wiki data table created successfully")
+        except Exception as e:
+            logger.error(f"Error creating wiki table: {e}")
+            self.conn.rollback()
+            raise
+    
+    def extract_wiki_data(self, wiki_entry):
+        """Extract and structure wiki data for database insertion"""
+        try:
+            data = wiki_entry.get('data', {})
+            wikidata = data.get('wikidata', {})
+            thumbnail = data.get('thumbnail', {})
+            original_image = data.get('originalimage', {})
+            
+            # Parse birth date
+            birth_date = None
+            if wikidata.get('birthDate'):
+                try:
+                    birth_date = wikidata['birthDate'].split('T')[0]
+                except:
+                    birth_date = None
+            
+            extracted_data = {
+                'imdb_id': wiki_entry.get('imdb_id'),
+                'wikidata_id': wiki_entry.get('wikidata_id'),
+                'wikipedia_url': wiki_entry.get('wikipedia_url'),
+                'wikipedia_title': wiki_entry.get('wikipedia_title'),
+                'status': wiki_entry.get('status'),
+                'title': data.get('title'),
+                'description': data.get('description'),
+                'extract': data.get('extract'),
+                'full_extract': data.get('full_extract'),
+                'page_id': data.get('page_id'),
+                'page_url': data.get('page_url'),
+                'lang': data.get('lang'),
+                'birth_date': birth_date,
+                'birth_place': wikidata.get('birthPlace'),
+                'occupation': wikidata.get('occupation'),
+                'thumbnail_url': thumbnail.get('source'),
+                'thumbnail_width': thumbnail.get('width'),
+                'thumbnail_height': thumbnail.get('height'),
+                'original_image_url': original_image.get('source'),
+                'original_image_width': original_image.get('width'),
+                'original_image_height': original_image.get('height'),
+                'categories': data.get('categories', []),
+                'wikidata_info': json.dumps(wikidata) if wikidata else None,
+                'raw_data': json.dumps(wiki_entry)
+            }
+            
+            return extracted_data
+            
+        except Exception as e:
+            logger.error(f"Error extracting wiki data: {e}")
+            return None
+    
+    def insert_wiki_entry(self, wiki_data):
+        """Insert a single wiki data record"""
+        insert_query = """
+        INSERT INTO wiki_data (
+            imdb_id, wikidata_id, wikipedia_url, wikipedia_title, status,
+            title, description, extract, full_extract, page_id, page_url, lang,
+            birth_date, birth_place, occupation, thumbnail_url, thumbnail_width,
+            thumbnail_height, original_image_url, original_image_width,
+            original_image_height, categories, wikidata_info, raw_data
+        )
+        VALUES (
+            %(imdb_id)s, %(wikidata_id)s, %(wikipedia_url)s, %(wikipedia_title)s, %(status)s,
+            %(title)s, %(description)s, %(extract)s, %(full_extract)s, %(page_id)s, %(page_url)s, %(lang)s,
+            %(birth_date)s, %(birth_place)s, %(occupation)s, %(thumbnail_url)s, %(thumbnail_width)s,
+            %(thumbnail_height)s, %(original_image_url)s, %(original_image_width)s,
+            %(original_image_height)s, %(categories)s, %(wikidata_info)s, %(raw_data)s
+        )
+        ON CONFLICT (imdb_id) DO UPDATE SET
+            wikidata_id = EXCLUDED.wikidata_id,
+            wikipedia_url = EXCLUDED.wikipedia_url,
+            wikipedia_title = EXCLUDED.wikipedia_title,
+            status = EXCLUDED.status,
+            title = EXCLUDED.title,
+            description = EXCLUDED.description,
+            extract = EXCLUDED.extract,
+            full_extract = EXCLUDED.full_extract,
+            page_id = EXCLUDED.page_id,
+            page_url = EXCLUDED.page_url,
+            lang = EXCLUDED.lang,
+            birth_date = EXCLUDED.birth_date,
+            birth_place = EXCLUDED.birth_place,
+            occupation = EXCLUDED.occupation,
+            thumbnail_url = EXCLUDED.thumbnail_url,
+            thumbnail_width = EXCLUDED.thumbnail_width,
+            thumbnail_height = EXCLUDED.thumbnail_height,
+            original_image_url = EXCLUDED.original_image_url,
+            original_image_width = EXCLUDED.original_image_width,
+            original_image_height = EXCLUDED.original_image_height,
+            categories = EXCLUDED.categories,
+            wikidata_info = EXCLUDED.wikidata_info,
+            raw_data = EXCLUDED.raw_data;
+        """
+        
+        try:
+            self.cursor.execute(insert_query, wiki_data)
+            return True
+        except Exception as e:
+            logger.error(f"Error inserting wiki data {wiki_data.get('imdb_id', 'Unknown')}: {e}")
+            return False
+    
+    def load_wiki_json_file(self, file_path):
+        """Load and parse wiki JSON file"""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as file:
+                data = json.load(file)
+            logger.info(f"Successfully loaded {len(data)} wiki records from {file_path}")
+            return data
+        except Exception as e:
+            logger.error(f"Error loading wiki JSON file: {e}")
+            raise
+    
+    def insert_wiki_data_from_json(self, json_file_path):
+        """Main method to insert all wiki data from JSON file"""
+        try:
+            # Load JSON data
+            wiki_data_list = self.load_wiki_json_file(json_file_path)
+            
+            successful_inserts = 0
+            failed_inserts = 0
+            
+            # Insert each wiki entry
+            for wiki_entry in wiki_data_list:
+                extracted_data = self.extract_wiki_data(wiki_entry)
+                if extracted_data and self.insert_wiki_entry(extracted_data):
+                    successful_inserts += 1
+                else:
+                    failed_inserts += 1
+            
+            # Commit all changes
+            self.conn.commit()
+            
+            logger.info(f"Wiki data insertion complete: {successful_inserts} successful, {failed_inserts} failed")
+            return successful_inserts, failed_inserts
+            
+        except Exception as e:
+            logger.error(f"Error during wiki data bulk insertion: {e}")
+            self.conn.rollback()
+            raise
+    
+    def get_wiki_data_count(self):
+        """Get total number of wiki entries in database"""
+        try:
+            self.cursor.execute("SELECT COUNT(*) FROM wiki_data;")
+            count = self.cursor.fetchone()['count']
+            return count
+        except Exception as e:
+            logger.error(f"Error getting wiki data count: {e}")
+            return None
+    
+    def get_wiki_data_by_imdb_id(self, imdb_id):
+        """Retrieve wiki data by IMDB ID"""
+        query = "SELECT * FROM wiki_data WHERE imdb_id = %s;"
+        
+        try:
+            self.cursor.execute(query, (imdb_id,))
+            result = self.cursor.fetchone()
+            
+            if result:
+                return dict(result)
+            else:
+                logger.info(f"No wiki data found for IMDB ID: {imdb_id}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error retrieving wiki data for {imdb_id}: {e}")
+            return None
+    
+    def close_connection(self):
+        """Close database connection"""
+        if self.cursor:
+            self.cursor.close()
+        if self.conn:
+            self.conn.close()
+        logger.info("Database connection closed")
+
+def main():
+    """Main execution function"""
+    # Database configuration
+    db_config = {
+        'host': 'localhost',
+        'database': 'actors_db',
+        'user': 'your_username',
+        'password': 'your_password'
+    }
+    
+    # JSON file path
+    wiki_json_file_path = 'wiki_data_2.json'
+    
+    # Initialize database handler
+    wiki_db = WikiDataDatabase(**db_config)
+    
+    try:
+        # Connect to database
+        wiki_db.connect()
+        
+        # Create wiki data table
+        wiki_db.create_wiki_table()
+        
+        # Insert wiki data from JSON
+        successful, failed = wiki_db.insert_wiki_data_from_json(wiki_json_file_path)
+        
+        # Display results
+        total_wiki_entries = wiki_db.get_wiki_data_count()
+        print(f"\n=== WIKI DATA INSERTION SUMMARY ===")
+        print(f"Successful insertions: {successful}")
+        print(f"Failed insertions: {failed}")
+        print(f"Total wiki entries in database: {total_wiki_entries}")
+        
+        # Test retrieval
+        test_imdb_id = "nm0000532"  # Malcolm McDowell
+        wiki_data = wiki_db.get_wiki_data_by_imdb_id(test_imdb_id)
+        if wiki_data:
+            print(f"\n=== TEST RETRIEVAL ===")
+            print(f"Retrieved wiki data for: {wiki_data['wikipedia_title']}")
+            print(f"Description: {wiki_data['description']}")
+            print(f"Birth Date: {wiki_data['birth_date']}")
+        
+    except Exception as e:
+        logger.error(f"Application error: {e}")
+    finally:
+        wiki_db.close_connection()
+
+if __name__ == "__main__":
+    main()
